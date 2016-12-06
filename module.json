@@ -4,10 +4,33 @@
   "category": "environment",
   "defaults" : {
     "title" : "EventForwarder",
-    "description" : "Event forwarder to integrate events with other home automation software"
+    "description" : "Event forwarder to integrate events with other home automation software",
+    "submit_host": "http://localhost",
+    "submit_uri": "/api/v1/zway/events"
   },
   "schema": {
+    "type": "object",
+    "properties": {
+      "submit_host": {
+        "type": "string",
+        "required": true
+      },
+      "submit_uri": {
+        "type": "string",
+        "required": true
+      }
+    }
   },
   "options": {
+    "fields": {
+      "submit_host": {
+        "label": "host",
+        "type" : "text"
+      },
+      "submit_uri": {
+        "label": "uri",
+        "type" : "text"
+      }
+    }
   }
 }
