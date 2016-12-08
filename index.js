@@ -19,9 +19,9 @@ EventForwarder.prototype.init = function (config) {
     if(this.config.submit_host == null) { throw "EventForwarder - submit_host is undefined" }
     if(this.config.submit_uri == null) { throw "EventForwarder - submit_uri is undefined" }
 
-    this.submit_url = this.config.submit_host + this.config.submit_uri
+    self.submit_url = this.config.submit_host + this.config.submit_uri
 
-    this.devices = {};
+    self.devices = {};
 
     this.handleDevUpdates = function (vDev) {
         self.updateState(vDev);
@@ -38,18 +38,30 @@ EventForwarder.prototype.init = function (config) {
     // Determine current configured devices
     self.controller.devices.each(self.handleDevCreation);
 
-    self.controller.devices.onAny(function (value) {
-      console.log("Device event:", this.event, value)
-    })
-
-    self.controller.onAny(function (value) {
-      console.log("Controller event:", this.event, value)
-    })
+    // self.controller.devices.onAny(function (value, value2, value3) {
+    //   console.log("Device event:", this.event, "obj:", JSON.stringify(value), "v2:", value2, "v3:", value3)
+    // })
+    //
+    // self.controller.onAny(function (value, value2) {
+    //   console.log("Controller event:", this.event, value, value2)
+    // })
 
     // Setup event listeners
     self.controller.devices.on('change:metrics:level', self.handleDevUpdates);
     self.controller.devices.on('created', self.handleDevCreation);
     self.controller.devices.on('removed', self.handleDevDeletion);
+
+    // var callback = function(type,arg) {
+    //   console.log('### here I am ###', arguments.length, "type:", type, "arg:", arg)
+    // };
+    //
+    // zway.data.bind(callback);
+    //
+    // for (var dv in zway.devices) {
+    //   var dv = zway.devices[dv];
+    //   console.log("STUFF: ", JSON.stringify(dv))
+    //   dv.data.bind(callback, null, true);
+    // }
 };
 
 EventForwarder.prototype.stop = function () {
@@ -71,57 +83,60 @@ EventForwarder.prototype.updateState = function(vDev) {
         meterType,
         self = this;
 
-    debugPrint('EventForwarder: Device update ' + JSON.stringify(vDev));
+    // debugPrint('EventForwarder: Device update ' + JSON.stringify(vDev));
 
     if(!self.devices[vDev.id]) {
-        debugPrint('EventForwarder: updateStatus: Unknown device ' + vDev.id);
+        debugPrint('EventForwarder: update: Unknown device ' + vDev.id);
         return;
     }
 
+    console.log("EventForwarder update:", JSON.stringify(vDev), vDev.get('metrics:level'))
+
     // A bug in zway is causing multiple update events to be triggered for each update
-    if(self.devices[vDev.id].level !== vDev.get('metrics:level')) {
-        self.devices[vDev.id].level = vDev.get('metrics:level');
+    // if(self.devices[vDev.id].level !== vDev.get('metrics:level')) {
+    //     self.devices[vDev.id].level = vDev.get('metrics:level');
 
-        fields = vDev.id.replace(/ZWayVDev_zway_/, '').split('-');
-        if(fields.length) {
+    fields = vDev.id.replace(/ZWayVDev_zway_/, '').split('-');
+    console.log("Fields:", JSON.stringify(fields))
+    if(fields.length) {
 
-            if(parseInt(fields[2], 10) === 0x32) {
-                meterType = global.zway.devices[fields[0]].instances[fields[1]].commandClasses[fields[2]].data[fields[3]].sensorType.value;
-            }
-
-            // http.request(
-            var status = this.getDeviceStatus(fields[0])
-            var httpObj = {
-                method: 'POST',
-                async: true,
-                url: this.submit_url,
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                data: JSON.stringify({
-                    type: "update",
-                    status: status ? 'offline' : 'online',
-                    nodeId: parseInt(fields[0], 10),
-                    instanceId: parseInt(fields[1], 10),
-                    cmdClass: parseInt(fields[2], 10),
-                    meterType: meterType,
-                    sensorType: fields[3] ? parseInt(fields[3], 10) : undefined,
-                    vDevId: vDev.id,
-                    value: vDev.get('metrics:level'),
-                    timestamp: vDev.get('updateTime')
-                })
-            }
-            debugPrint('EventForwarder sending update event: ' + JSON.stringify(httpObj));
-          //);
+        if(parseInt(fields[2], 10) === 0x32) {
+            meterType = global.zway.devices[fields[0]].instances[fields[1]].commandClasses[fields[2]].data[fields[3]].sensorType.value;
         }
+
+        var status = self.getDeviceStatus(fields[0])
+        var httpObj = {
+            method: 'POST',
+            async: true,
+            url: self.submit_url,
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            data: JSON.stringify({
+                type: "update",
+                status: status ? 'offline' : 'online',
+                nodeId: parseInt(fields[0], 10),
+                instanceId: parseInt(fields[1], 10),
+                cmdClass: parseInt(fields[2], 10),
+                meterType: meterType,
+                sensorType: fields[3] ? parseInt(fields[3], 10) : undefined,
+                vDevId: vDev.id,
+                value: vDev.get('metrics:level'),
+                timestamp: vDev.get('updateTime')
+            })
+        }
+        console.log("EventForwarder: sending update event")
+        http.request(httpObj)
+        debugPrint('EventForwarder sending update event: ' + JSON.stringify(httpObj));
     }
+    // }
 };
 
 EventForwarder.prototype.deleteDevice = function(vDev) {
     var fields,
         self = this;
 
-    debugPrint('EventForwarder: Removed device ' + JSON.stringify(vDev));
+    // debugPrint('EventForwarder: Removed device ' + JSON.stringify(vDev));
 
     fields = vDev.id.replace(/ZWayVDev_zway_/, '').split('-');
     if(fields.length) {
@@ -129,11 +144,10 @@ EventForwarder.prototype.deleteDevice = function(vDev) {
             meterType = global.zway.devices[fields[0]].instances[fields[1]].commandClasses[fields[2]].data[fields[3]].sensorType.value;
         }
 
-        // http.request(
         var httpObj = {
             method: 'POST',
             async: true,
-            url: this.submit_url,
+            url: self.submit_url,
             headers: {
                 'Content-Type': 'application/json'
             },
@@ -146,7 +160,8 @@ EventForwarder.prototype.deleteDevice = function(vDev) {
                 sensorType: fields[3] ? parseInt(fields[3], 10) : undefined
             })
         }
-      // );
+        console.log("EventForwarder: sending delete event")
+        http.request(httpObj);
 
         debugPrint('EventForwarder sending removed event: ' + JSON.stringify(httpObj));
 
@@ -160,7 +175,7 @@ EventForwarder.prototype.createDevice = function(vDev) {
         meterType,
         self = this;
 
-    debugPrint('EventForwarder: Created new device ' + JSON.stringify(vDev));
+    // debugPrint('EventForwarder: Created new device ' + JSON.stringify(vDev));
 
     if(!self.devices[vDev.id]) {
         self.devices[vDev.id] = {};
@@ -172,8 +187,8 @@ EventForwarder.prototype.createDevice = function(vDev) {
 
         var field = fields[0]
         if(field && global.zway.devices[field] && global.zway.devices[field].data && global.zway.devices[field].data.isFailed) {
-            self.devices[vDev.id].status = this.getDeviceStatus(fields[0]);
-            global.zway.devices[fields[0]].data.isFailed.bind(self.updateStatus, fields[0]);
+            self.devices[vDev.id].status = self.getDeviceStatus(fields[0]);
+            global.zway.devices[fields[0]].data.isFailed.bind(self.updateStatus, self.submit_url, fields[0]);
         }
 
         var field1 = fields[1]
@@ -181,17 +196,16 @@ EventForwarder.prototype.createDevice = function(vDev) {
             meterType = global.zway.devices[fields[0]].instances[fields[1]].commandClasses[fields[2]].data[fields[3]].sensorType.value;
         }
 
-        // http.request(
         var httpObj = {
             method: 'POST',
             async: true,
-            url: this.submit_url,
+            url: self.submit_url,
             headers: {
                 'Content-Type': 'application/json'
             },
             data: JSON.stringify({
                 type: "create",
-                status: this.getDeviceStatus(fields[0]) ? 'offline' : 'online',
+                status: self.getDeviceStatus(fields[0]) ? 'offline' : 'online',
                 nodeId: parseInt(fields[0], 10),
                 instanceId: parseInt(fields[1], 10),
                 cmdClass: parseInt(fields[2], 10),
@@ -202,35 +216,38 @@ EventForwarder.prototype.createDevice = function(vDev) {
                 timestamp: vDev.get('updateTime')
             })
         }
+        console.log("EventForwarder: sending create event")
+        http.request(httpObj)
 
         debugPrint('EventForwarder sending created event: ' + JSON.stringify(httpObj));
-      // );
     }
 };
 
-EventForwarder.prototype.updateStatus = function(unknown, nodeId) {
+EventForwarder.prototype.updateStatus = function(unknown, submit_url, nodeId) {
+    var self = this;
 
-    debugPrint('EventForwarder: Status update, node ' + nodeId + ' went ' + (this.value ? 'offline' : 'online'));
+    console.log("EventForwarder: update status:", JSON.stringify(self))
 
-    // http.request(
+    // debugPrint('EventForwarder: Status update, node ' + nodeId + ' went ' + (this.value ? 'offline' : 'online'));
+
     var httpObj = {
         method: 'POST',
         async: true,
-        url: this.submit_url,
+        url: submit_url,
         headers: {
             'Content-Type': 'application/json'
         },
         data: JSON.stringify({
             type: "status_update",
-            status: this.value ? 'offline' : 'online',
+            status: self.value ? 'offline' : 'online',
             nodeId: parseInt(nodeId, 10),
-            timestamp: this.updateTime
+            timestamp: self.updateTime
         })
     }
+    console.log("EventForwarder: sending status update event")
 
     debugPrint('EventForwarder sending status update: ' + JSON.stringify(httpObj));
-
-  // );
+    http.request(httpObj)
 }
 
 EventForwarder.prototype.getDeviceStatus = function(deviceId) {
