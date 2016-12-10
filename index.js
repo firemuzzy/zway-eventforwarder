@@ -79,56 +79,98 @@ EventForwarder.prototype.stop = function () {
 // ----------------------------------------------------------------------------
 
 EventForwarder.prototype.updateState = function(vDev) {
-    var fields,
-        meterType,
-        self = this;
+    var self = this;
 
-    // debugPrint('EventForwarder: Device update ' + JSON.stringify(vDev));
-
-    if(!self.devices[vDev.id]) {
-        debugPrint('EventForwarder: update: Unknown device ' + vDev.id);
-        return;
+    var zwayIds = self.parseZWayId(vDev.id)
+    if(zwayIds == null) {
+      console.error("EventForwarder: ERROR could not parse vDev.id ", vDev.id)
+      return
     }
 
-    console.log("EventForwarder update:", JSON.stringify(vDev), vDev.get('metrics:level'))
+    // console.log("DEVICES", JSON.stringify(self.devices, null, 2))
+
+    // if(!self.devices[vDev.id]) {
+    //     debugPrint('EventForwarder: update: Unknown device ' + vDev.id);
+    //     return;
+    // }
+
+    var nodeId = zwayIds.nodeId
+    var instanceId = zwayIds.instanceId
+    var cmdClass = zwayIds.cmdClass
+    var sensorType = zwayIds.sensorType
+
+    // log if missing data
+    if(nodeId == null) {
+      console.error("EventForwarder: ERROR could not parse node id from zwayId", vDev.id)
+    }
+    if(instanceId == null) {
+      console.error("EventForwarder: ERROR could not parse instanceId from zwayId", vDev.id)
+    }
+    if(cmdClass == null) {
+      console.error("EventForwarder: ERROR could not parse cmdClass from zwayId", vDev.id)
+    }
+
+    var zwayDevice = nodeId && global.zway.devices[nodeId]
+
+    // attach a callback on failure event
+    if(zwayDevice == null) {
+      console.error("EventForwarder: ERROR could find zway device for nodeId", nodeId)
+    }
+
+    // determine the meter type
 
     // A bug in zway is causing multiple update events to be triggered for each update
     // if(self.devices[vDev.id].level !== vDev.get('metrics:level')) {
     //     self.devices[vDev.id].level = vDev.get('metrics:level');
 
-    fields = vDev.id.replace(/ZWayVDev_zway_/, '').split('-');
-    console.log("Fields:", JSON.stringify(fields))
-    if(fields.length) {
+    var meterType = this.getMeterType(instanceId, cmdClass, sensorType, zwayDevice)
+    var status = self.getDeviceStatus(nodeId)
+    var value = vDev.get('metrics:level')
 
-        if(parseInt(fields[2], 10) === 0x32) {
-            meterType = global.zway.devices[fields[0]].instances[fields[1]].commandClasses[fields[2]].data[fields[3]].sensorType.value;
+    var devId = vDev.get('id'),
+        devType = vDev.get('deviceType'),
+        devProbeType = vDev.get('probeType'),
+        devName = vDev.get('metrics:title'),
+        scaleUnit = vDev.get('metrics:scaleTitle'),
+        lvl = vDev.get('metrics:level'),
+        eventType = function(){
+            if(vDev.get('metrics:probeTitle')){
+                return vDev.get('metrics:probeTitle').toLowerCase();
+            }else {
+                return 'status';
+            }
         }
 
-        var status = self.getDeviceStatus(fields[0])
-        var httpObj = {
-            method: 'POST',
-            async: true,
-            url: self.submit_url,
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            data: JSON.stringify({
-                type: "update",
-                status: status ? 'offline' : 'online',
-                nodeId: parseInt(fields[0], 10),
-                instanceId: parseInt(fields[1], 10),
-                cmdClass: parseInt(fields[2], 10),
-                meterType: meterType,
-                sensorType: fields[3] ? parseInt(fields[3], 10) : undefined,
-                vDevId: vDev.id,
-                value: vDev.get('metrics:level'),
-                timestamp: vDev.get('updateTime')
-            })
-        }
-        console.log("EventForwarder: sending update event")
-        http.request(httpObj)
-        debugPrint('EventForwarder sending update event: ' + JSON.stringify(httpObj));
+    var httpObj = {
+        method: 'POST',
+        async: true,
+        url: self.submit_url,
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        data: JSON.stringify({
+            eventType: "update",
+            status: status ? 'offline' : 'online',
+            foreignDeviceId: nodeId ? "" + nodeId : null,
+            instanceId: instanceId,
+            cmdClass: cmdClass,
+            meterType: meterType,
+            sensorType: sensorType ? sensorType : undefined,
+            vDevId: vDev.id,
+            value: value != null ? "" + value : null,
+            createdOn: vDev.get('updateTime'),
+
+            lvl: lvl,
+            scaleUnit: scaleUnit,
+            name: devName,
+            probeType: devProbeType,
+            type: devType,
+            devId: devId
+        })
     }
+    console.log("EventForwarder: sending update event")
+    http.request(httpObj)
+    debugPrint('EventForwarder sending update event: ' + JSON.stringify(httpObj));
     // }
 };
 
@@ -140,6 +182,7 @@ EventForwarder.prototype.deleteDevice = function(vDev) {
 
     fields = vDev.id.replace(/ZWayVDev_zway_/, '').split('-');
     if(fields.length) {
+        var meterType = null
         if(parseInt(fields[2], 10) === 0x32) {
             meterType = global.zway.devices[fields[0]].instances[fields[1]].commandClasses[fields[2]].data[fields[3]].sensorType.value;
         }
@@ -152,8 +195,8 @@ EventForwarder.prototype.deleteDevice = function(vDev) {
                 'Content-Type': 'application/json'
             },
             data: JSON.stringify({
-                type: "delete",
-                nodeId: parseInt(fields[0], 10),
+                eventType: "delete",
+                foreignDeviceId: "" + parseInt(fields[0], 10),
                 instanceId: parseInt(fields[1], 10),
                 cmdClass: parseInt(fields[2], 10),
                 meterType: meterType,
@@ -171,56 +214,74 @@ EventForwarder.prototype.deleteDevice = function(vDev) {
 
 
 EventForwarder.prototype.createDevice = function(vDev) {
-    var fields,
-        meterType,
-        self = this;
+    var self = this;
 
-    // debugPrint('EventForwarder: Created new device ' + JSON.stringify(vDev));
-
-    if(!self.devices[vDev.id]) {
-        self.devices[vDev.id] = {};
-        self.devices[vDev.id].level = vDev.get('metrics:level');
+    var zwayIds = self.parseZWayId(vDev.id)
+    if(zwayIds == null) {
+      console.error("EventForwarder: ERROR could not parse vDev.id ", vDev.id)
+      return
     }
 
-    fields = vDev.id.replace(/ZWayVDev_zway_/, '').split('-');
-    if(fields.length) {
+    var nodeId = zwayIds.nodeId
+    var instanceId = zwayIds.instanceId
+    var cmdClass = zwayIds.cmdClass
+    var sensorType = zwayIds.sensorType
 
-        var field = fields[0]
-        if(field && global.zway.devices[field] && global.zway.devices[field].data && global.zway.devices[field].data.isFailed) {
-            self.devices[vDev.id].status = self.getDeviceStatus(fields[0]);
-            global.zway.devices[fields[0]].data.isFailed.bind(self.updateStatus, self.submit_url, fields[0]);
-        }
-
-        var field1 = fields[1]
-        if(parseInt(fields[2], 10) === 0x32 && global.zway.devices[field] && global.zway.devices[field].instances[fields[1]]) {
-            meterType = global.zway.devices[fields[0]].instances[fields[1]].commandClasses[fields[2]].data[fields[3]].sensorType.value;
-        }
-
-        var httpObj = {
-            method: 'POST',
-            async: true,
-            url: self.submit_url,
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            data: JSON.stringify({
-                type: "create",
-                status: self.getDeviceStatus(fields[0]) ? 'offline' : 'online',
-                nodeId: parseInt(fields[0], 10),
-                instanceId: parseInt(fields[1], 10),
-                cmdClass: parseInt(fields[2], 10),
-                meterType: meterType,
-                sensorType: fields[3] ? parseInt(fields[3], 10) : undefined,
-                vDevId: vDev.id,
-                value: vDev.get('metrics:level'),
-                timestamp: vDev.get('updateTime')
-            })
-        }
-        console.log("EventForwarder: sending create event")
-        http.request(httpObj)
-
-        debugPrint('EventForwarder sending created event: ' + JSON.stringify(httpObj));
+    // log if missing data
+    if(nodeId == null) {
+      console.error("EventForwarder: ERROR could not parse node id from zwayId", vDev.id)
     }
+    if(instanceId == null) {
+      console.error("EventForwarder: ERROR could not parse instanceId from zwayId", vDev.id)
+    }
+    if(cmdClass == null) {
+      console.error("EventForwarder: ERROR could not parse cmdClass from zwayId", vDev.id)
+    }
+
+    var zwayDevice = nodeId && global.zway.devices[nodeId]
+
+    // attach a callback on failure event
+    if(zwayDevice == null) {
+      console.error("EventForwarder: ERROR could find zway device for nodeId", nodeId)
+    } else {
+
+      if(zwayDevice.data == null) {
+        console.error("EventForwarder: ERROR device with nodeId", nodeId, "has no data")
+      } else {
+        // self.devices[vDev.id].status = self.getDeviceStatus(nodeId);
+        global.zway.devices[nodeId].data.isFailed.bind(self.updateStatus, self.submit_url, nodeId);
+      }
+
+    }
+
+    // determine the meter type
+    var meterType = this.getMeterType(instanceId, cmdClass, sensorType, zwayDevice)
+    var value = vDev.get('metrics:level')
+
+    var httpObj = {
+        method: 'POST',
+        async: true,
+        url: self.submit_url,
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        data: JSON.stringify({
+            eventType: "create",
+            status: self.getDeviceStatus(nodeId) ? 'offline' : 'online',
+            foreignDeviceId: nodeId != null ? "" + nodeId : null,
+            instanceId: instanceId,
+            cmdClass: cmdClass,
+            meterType: meterType,
+            sensorType: sensorType ? sensorType : undefined,
+            vDevId: vDev.id,
+            value: value != null ? "" + value : null,
+            createdOn: vDev.get('updateTime')
+        })
+    }
+    console.log("EventForwarder: sending create event")
+    http.request(httpObj)
+
+    debugPrint('EventForwarder sending created event: ' + JSON.stringify(httpObj));
 };
 
 EventForwarder.prototype.updateStatus = function(unknown, submit_url, nodeId) {
@@ -238,16 +299,56 @@ EventForwarder.prototype.updateStatus = function(unknown, submit_url, nodeId) {
             'Content-Type': 'application/json'
         },
         data: JSON.stringify({
-            type: "status_update",
+            eventType: "status_update",
             status: self.value ? 'offline' : 'online',
-            nodeId: parseInt(nodeId, 10),
-            timestamp: self.updateTime
+            foreignDeviceId: "" + parseInt(nodeId, 10),
+            createdOn: self.updateTime
         })
     }
     console.log("EventForwarder: sending status update event")
 
     debugPrint('EventForwarder sending status update: ' + JSON.stringify(httpObj));
     http.request(httpObj)
+}
+
+EventForwarder.prototype.getMeterType = function(instanceId, cmdClass, sensorType, zwayDevice) {
+  var meterType = null
+
+  if(instanceId == null) return null
+  if(cmdClass == null) return null
+  if(sensorType == null) return null
+  if(zwayDevice == null) return null
+
+  if(cmdClass == 0x32) {
+
+    var zwayDeviceInstance = zwayDevice.instances[instanceId]
+    if(zwayDeviceInstance == null) {
+      console.error("EventForwarder: ERROR device with nodeId", nodeId, "has no instance")
+    } else {
+      meterType = zwayDeviceInstance.commandClasses[cmdClass].data[sensorType].sensorType.value
+    }
+
+  }
+
+  return meterType
+}
+
+EventForwarder.prototype.parseZWayId = function(zwayId) {
+  if(zwayId == null) return null
+
+  var result = { nodeId: null, instanceId:null, cmdClass: null, sensorType:null }
+  var indexOfUnderscore = zwayId.lastIndexOf('_')
+
+  // check that undercore exists
+  if(indexOfUnderscore < 0) return {}
+  var unparsedData = zwayId.substring(zwayId.lastIndexOf('_') + 1)
+  var splitResult = unparsedData.split('-')
+
+  result.nodeId = parseInt(splitResult[0], 10)
+  result.instanceId = parseInt(splitResult[1], 10)
+  result.cmdClass = parseInt(splitResult[2], 10)
+  result.sensorType = splitResult[3]
+  return result
 }
 
 EventForwarder.prototype.getDeviceStatus = function(deviceId) {
